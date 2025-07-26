@@ -1,0 +1,117 @@
+// --- Load Iowa & Counties ---
+var states = ee.FeatureCollection("TIGER/2018/States");
+var iowa = states.filter(ee.Filter.eq('NAME', 'Iowa'));
+var counties = ee.FeatureCollection("TIGER/2018/Counties")
+  .filter(ee.Filter.eq('STATEFP', '19'));
+Map.centerObject(iowa, 7);
+
+// --- Load GHSL (Global Human Settlement) Built-up Surface Collection ---
+var builtUpCollection = ee.ImageCollection("JRC/GHSL/P2023A/GHS_BUILT_S")
+  .select('built_surface')
+  .filterBounds(iowa)
+  .filter(ee.Filter.calendarRange(1985, 2025, 'year'));
+
+var vizParams = {
+  min: 0,
+  max: 100,
+  palette: ['white', 'yellow', 'orange', 'red', 'maroon']
+};
+
+// --- Add Built‑Up Layers at 5‑Year Intervals ---
+ee.List.sequence(1985, 2025, 5).evaluate(function(yearList) {
+  yearList.forEach(function(y) {
+    var img = builtUpCollection
+      .filter(ee.Filter.eq('system:index', String(y)))
+      .first();
+    if (img) {
+      Map.addLayer(img.clip(iowa), vizParams, 'Built‑up ' + y, false);
+    }
+  });
+
+  // --- Add Iowa Border ---
+  Map.addLayer(iowa.style({
+    color: 'black', fillColor: '00000000', width: 3
+  }), {}, 'Iowa Border');
+
+  // --- Add Counties LAST (on TOP) ---
+  Map.addLayer(counties.style({
+    color: 'black', fillColor: '00000000', width: 1.5
+  }), {}, 'Iowa Counties (Top)');
+});
+
+// --- Export Multi-Band Composite ---This will stack all the images available 
+var builtUpStacked = builtUpCollection.toBands();
+Export.image.toDrive({
+  image: builtUpStacked.clip(iowa).float(),
+  description: 'Iowa_Builtup_Stacked',
+  region: iowa.geometry(),
+  scale: 150,
+  maxPixels: 1e13,
+  folder: 'urban_expansion_output',
+  crs: 'EPSG:4326'
+});
+
+// --- Area Calculations ---
+var reduceParams = {
+  reducer: ee.Reducer.sum(),
+  geometry: iowa,
+  scale: 150,
+  maxPixels: 1e13,
+  bestEffort: true
+};
+
+var area1985 = ee.Number(builtUpCollection
+  .filter(ee.Filter.eq('system:index', '1985')).first()
+  .reduceRegion(reduceParams).values().get(0)).divide(1e6);
+
+var area2025 = ee.Number(builtUpCollection
+  .filter(ee.Filter.eq('system:index', '2025')).first()
+  .reduceRegion(reduceParams).values().get(0)).divide(1e6);
+
+print('Built-up Area in 1985 (km²):', area1985);
+print('Built-up Area in 2025 (km²):', area2025);
+
+// --- Time-Series Chart ---
+var builtUpSeries = builtUpCollection.map(function(img) {
+  return img.divide(1e6).copyProperties(img, img.propertyNames());
+});
+print(ui.Chart.image.series(builtUpSeries, iowa, ee.Reducer.sum(), 150, 'system:time_start')
+  .setChartType('ColumnChart')
+  .setOptions({
+    title: 'Urban Expansion of Built-Up Surface in Iowa (1985–2025)',
+    titleTextStyle: { fontSize: 16, bold: true },
+    subtitle: 'Prepared by Mirza Md Tasnim Mukarram, University of Iowa',
+    vAxis: { title: 'Built‑up Area (km²)' },
+    hAxis: { title: 'Year' },
+    series: { 0: { color: 'indigo' } },
+    chartArea: { width: '80%' }
+  })
+);
+
+// --- Legend ---
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px',
+    backgroundColor: 'white',
+    border: '2px solid black',
+    width: '150px'
+  }
+});
+legend.add(ui.Label('Legend: Built‑up Surface', {
+  fontWeight: 'bold', fontSize: '14px', margin: '0 0 6px 0'
+}));
+legend.add(ui.Thumbnail({
+  image: ee.Image.pixelLonLat().select(0),
+  params: {
+    bbox: [0, 0, 1, 0.1],
+    dimensions: '100x10',
+    format: 'png',
+    min: 0,
+    max: 1,
+    palette: vizParams.palette
+  },
+  style: { stretch: 'horizontal', margin: '0px 8px', maxHeight: '20px' }
+}));
+legend.add(ui.Label('Low     →     High', { fontSize: '10px' }));
+Map.add(legend);
